@@ -32,9 +32,9 @@ type LoginRequest struct {
 }
 
 type RegisterAuthRequest struct {
-    UserID   uuid.UUID `json:"user_id" binding:"required"`
-    Email    string    `json:"email" binding:"required,email"`
-    Password string    `json:"password" binding:"required,min=8"`
+    UserID   string `json:"user_id" binding:"required"`
+    Email    string `json:"email" binding:"required,email"`
+    Password string `json:"password" binding:"required,min=8"`
 }
 
 type ChangePasswordRequest struct {
@@ -54,9 +54,15 @@ func NewAuthService(db *gorm.DB, config *config.Config, userClient *UserClient) 
 }
 
 func (s *AuthService) RegisterUserAuth(req RegisterAuthRequest) error {
+    // Parse string UserID ke uuid.UUID
+    userID, err := uuid.Parse(req.UserID)
+    if err != nil {
+        return fmt.Errorf("invalid user ID format: %w", err)
+    }
+
     // Check if user auth already exists
     var existingAuth models.UserAuth
-    if err := s.db.Where("email = ? OR id = ?", req.Email, req.UserID).First(&existingAuth).Error; err == nil {
+    if err := s.db.Where("email = ? OR id = ?", req.Email, userID).First(&existingAuth).Error; err == nil {
         return errors.New("user auth already exists")
     }
 
@@ -73,7 +79,7 @@ func (s *AuthService) RegisterUserAuth(req RegisterAuthRequest) error {
 
     // Create user auth record
     userAuth := &models.UserAuth{
-        ID:                req.UserID,
+        ID:                userID, // Gunakan userID yang sudah di-parse
         Email:             req.Email,
         PasswordHash:      string(hashedPassword),
         IsActive:          true,
@@ -87,8 +93,8 @@ func (s *AuthService) RegisterUserAuth(req RegisterAuthRequest) error {
         return err
     }
 
-    // Log audit event
-    s.logAuditEvent(&req.UserID, models.AuditActionLogin, "auth", "User auth created", "", "", true, "")
+    // Log audit event dengan userID yang sudah di-parse
+    s.logAuditEvent(&userID, models.AuditActionLogin, "auth", "User auth created", "", "", true, "")
 
     return nil
 }
@@ -255,8 +261,7 @@ func (s *AuthService) GetUserPermissions(role models.UserRole, userID uuid.UUID)
     err := s.db.Table("role_permissions").
         Select("permissions.name").
         Joins("JOIN permissions ON role_permissions.permission_id = permissions.id").
-        Joins("JOIN roles ON roles.id = role_permissions.role_id").
-        Where("roles.name = ?", string(role)).
+        Where("role_permissions.role = ?", string(role)).
         Pluck("permissions.name", &permissions).Error
     
     if err != nil {

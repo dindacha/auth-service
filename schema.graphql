@@ -1,0 +1,97 @@
+type User {
+  id: String!
+  email: String!
+  firstName: String!
+  lastName: String!
+  phone: String
+  role: UserRole!
+  isActive: Boolean!
+  isVerified: Boolean!
+  createdAt: String!
+}
+
+enum UserRole {
+  ADMIN
+  CUSTOMER
+  MERCHANT
+  MODERATOR
+}
+
+type AuthResponse {
+  accessToken: String!
+  refreshToken: String!
+  expiresIn: Int!
+  tokenType: String!
+  user: User!
+}
+
+type ValidationResponse {
+  valid: Boolean!
+  userID: String
+  email: String
+  role: UserRole
+}
+
+type PermissionResponse {
+  hasPermission: Boolean!
+  userID: String!
+}
+
+input LoginInput {
+  email: String!
+  password: String!
+}
+
+input RegisterAuthInput {
+  userID: String!
+  email: String!
+  password: String!
+}
+
+input RefreshTokenInput {
+  refreshToken: String!
+}
+
+input ChangePasswordInput {
+  userID: String!
+  oldPassword: String!
+  newPassword: String!
+}
+
+type Query {
+  validateToken(token: String!): ValidationResponse!
+  checkPermission(token: String!, resource: String!, action: String!): PermissionResponse!
+  getUserSessions(token: String!): [Session!]!
+  health: HealthResponse!
+}
+
+type Mutation {
+  login(input: LoginInput!): AuthResponse!
+  refreshToken(input: RefreshTokenInput!): AuthResponse!
+  logout(refreshToken: String!): GenericResponse!
+  registerUserAuth(input: RegisterAuthInput!): GenericResponse!
+  changePassword(input: ChangePasswordInput!): GenericResponse!
+  revokeSession(token: String!, sessionID: String!): GenericResponse!
+}
+
+type Session {
+  id: String!
+  tokenID: String!
+  isActive: Boolean!
+  expiresAt: String!
+  createdAt: String!
+  lastSeen: String!
+  ipAddress: String!
+  userAgent: String!
+}
+
+type GenericResponse {
+  success: Boolean!
+  message: String!
+}
+
+type HealthResponse {
+  status: String!
+  service: String!
+  version: String!
+}

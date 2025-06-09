@@ -3,12 +3,13 @@ package main
 import (
     "auth-service/config"
     "auth-service/database"
+    "auth-service/graph"
     "auth-service/services"
-    "auth-service/handlers"
     "log"
     "net/http"
 
-    "github.com/gin-gonic/gin"
+    "github.com/99designs/gqlgen/graphql/handler"
+    "github.com/99designs/gqlgen/graphql/playground"
     "github.com/joho/godotenv"
 )
 
@@ -21,11 +22,6 @@ func main() {
     // Load configuration
     cfg := config.Load()
 
-    // Set Gin mode based on environment
-    if cfg.Environment == "production" {
-        gin.SetMode(gin.ReleaseMode)
-    }
-
     // Initialize database
     db, err := database.InitDB(cfg)
     if err != nil {
@@ -35,80 +31,45 @@ func main() {
     // Initialize services
     userClient := services.NewUserClient(cfg.UserServiceURL)
     authService := services.NewAuthService(db, cfg, userClient)
-    // permissionService := services.NewPermissionService(db)
 
-    // Initialize handlers
-    authHandler := handlers.NewAuthHandler(authService, cfg)
-    // permissionHandler := handlers.NewPermissionHandler(authService, permissionService)
-    // adminHandler := handlers.NewAdminHandler(authService, permissionService)
+    // Initialize GraphQL resolver
+    resolver := graph.NewResolver(authService, cfg)
 
-    // Setup router
-    r := gin.Default()
+    // Create GraphQL server
+    srv := handler.NewDefaultServer(graph.NewExecutableSchema(graph.Config{
+        Resolvers: resolver,
+    }))
 
-    // Global middleware (simplified)
-    // r.Use(middleware.CORSMiddleware())
-    // r.Use(middleware.SecurityHeaders())
-    // r.Use(middleware.RequestLogger())
-
-    // Public routes
-    public := r.Group("/api/v1")
-    {
-        auth := public.Group("/auth")
-        {
-            auth.POST("/login", authHandler.Login)
-            auth.POST("/refresh", authHandler.RefreshToken)
-            auth.POST("/logout", authHandler.Logout)
-            auth.GET("/validate", authHandler.ValidateToken)
-            auth.GET("/check-permission", authHandler.CheckPermission)
-        }
-
-        // Internal endpoints (called by other services)
-        internal := public.Group("/internal")
-        {
-            internal.POST("/register-user-auth", authHandler.RegisterUserAuth)
-        }
-    }
-
-    // Protected routes (simplified)
-    protected := r.Group("/api/v1")
-    // protected.Use(middleware.AuthMiddleware(authService))
-    {
-        // User management
-        user := protected.Group("/user")
-        {
-            user.POST("/change-password", authHandler.ChangePassword)
-            user.GET("/sessions", authHandler.GetUserSessions)
-            user.DELETE("/sessions/:id", authHandler.RevokeSession)
-            // user.GET("/permissions", permissionHandler.GetUserPermissions)
-        }
-
-        // Admin routes (commented out for now)
-        // admin := protected.Group("/admin")
-        // admin.Use(middleware.RequirePermission("auth", "manage_permissions"))
-        // {
-        //     admin.GET("/users", adminHandler.GetUsers)
-        //     admin.PUT("/users/:id/activate", adminHandler.ActivateUser)
-        //     admin.PUT("/users/:id/deactivate", adminHandler.DeactivateUser)
-        //     admin.POST("/users/:id/permissions", adminHandler.GrantUserPermission)
-        //     admin.DELETE("/users/:id/permissions/:permissionId", adminHandler.RevokeUserPermission)
-        //     admin.GET("/audit-logs", adminHandler.GetAuditLogs)
-        //     admin.GET("/login-attempts", adminHandler.GetLoginAttempts)
-        // }
-    }
-
-    // Health check
-    r.GET("/health", func(c *gin.Context) {
-        c.JSON(http.StatusOK, gin.H{
-            "status":  "healthy",
-            "service": "auth",
-            "version": "1.0.0",
+    // Middleware to add context
+    contextMiddleware := func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            ctx := r.Context()
+            
+            // Add IP and User-Agent to context
+            ctx = graph.WithIPAddress(ctx, graph.GetClientIP(r))
+            ctx = graph.WithUserAgent(ctx, r.UserAgent())
+            
+            next.ServeHTTP(w, r.WithContext(ctx))
         })
+    }
+
+    // Setup routes
+    http.Handle("/", playground.Handler("GraphQL playground", "/graphql"))
+    http.Handle("/graphql", contextMiddleware(srv))
+
+    // Health check endpoint
+    http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(http.StatusOK)
+        w.Write([]byte(`{"status":"healthy","service":"auth","version":"1.0.0"}`))
     })
 
-    log.Printf("Auth service starting on port %s", cfg.Port)
+    log.Printf("🚀 GraphQL server starting on port %s", cfg.Port)
+    log.Printf("🎮 GraphQL playground: http://localhost:%s/", cfg.Port)
+    log.Printf("📡 GraphQL endpoint: http://localhost:%s/graphql", cfg.Port)
     log.Printf("Environment: %s", cfg.Environment)
 
-    if err := r.Run(":" + cfg.Port); err != nil {
+    if err := http.ListenAndServe(":"+cfg.Port, nil); err != nil {
         log.Fatal("Failed to start server:", err)
     }
 }
