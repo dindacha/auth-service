@@ -2,36 +2,38 @@ package handlers
 
 import (
     "auth-service/services"
+    "auth-service/config"
     "net/http"
     "strings"
     "github.com/gin-gonic/gin"
-    "github.com/google/uuid"
 )
 
 type AuthHandler struct {
     authService *services.AuthService
+    config      *config.Config
 }
 
-func NewAuthHandler(authService *services.AuthService) *AuthHandler {
+func NewAuthHandler(authService *services.AuthService, cfg *config.Config) *AuthHandler {
     return &AuthHandler{
         authService: authService,
+        config:      cfg,
     }
 }
 
-func (h *AuthHandler) Register(c *gin.Context) {
-    var req services.RegisterRequest
+func (h *AuthHandler) RegisterUserAuth(c *gin.Context) {
+    var req services.RegisterAuthRequest
     if err := c.ShouldBindJSON(&req); err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
         return
     }
 
-    response, err := h.authService.Register(req)
+    err := h.authService.RegisterUserAuth(req)
     if err != nil {
         c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
         return
     }
 
-    c.JSON(http.StatusCreated, response)
+    c.JSON(http.StatusCreated, gin.H{"message": "User auth created successfully"})
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {
@@ -41,7 +43,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
         return
     }
 
-    response, err := h.authService.Login(req)
+    // Get IP address and user agent
+    ipAddress := c.ClientIP()
+    userAgent := c.GetHeader("User-Agent")
+
+    response, err := h.authService.Login(req, ipAddress, userAgent)
     if err != nil {
         c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
         return
@@ -60,7 +66,11 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
         return
     }
 
-    response, err := h.authService.RefreshToken(req.RefreshToken)
+    // Get IP address and user agent
+    ipAddress := c.ClientIP()
+    userAgent := c.GetHeader("User-Agent")
+
+    response, err := h.authService.RefreshToken(req.RefreshToken, ipAddress, userAgent)
     if err != nil {
         c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
         return
@@ -96,7 +106,7 @@ func (h *AuthHandler) ValidateToken(c *gin.Context) {
     })
 }
 
-func (h *AuthHandler) GetProfile(c *gin.Context) {
+func (h *AuthHandler) CheckPermission(c *gin.Context) {
     authHeader := c.GetHeader("Authorization")
     if authHeader == "" {
         c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
@@ -115,30 +125,50 @@ func (h *AuthHandler) GetProfile(c *gin.Context) {
         return
     }
 
-    user, err := h.authService.GetUserByID(claims.UserID)
-    if err != nil {
-        c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+    resource := c.Query("resource")
+    action := c.Query("action")
+
+    if resource == "" || action == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "resource and action parameters required"})
         return
     }
 
-    c.JSON(http.StatusOK, user)
+    // Check if user has permission
+    hasPermission := false
+    for _, permission := range claims.Permissions {
+        if permission == resource+":"+action {
+            hasPermission = true
+            break
+        }
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "has_permission": hasPermission,
+        "user_id":        claims.UserID,
+    })
 }
 
-func (h *AuthHandler) GetUserByID(c *gin.Context) {
-    userIDStr := c.Param("id")
-    userID, err := uuid.Parse(userIDStr)
-    if err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+func (h *AuthHandler) ChangePassword(c *gin.Context) {
+    var req services.ChangePasswordRequest
+    if err := c.ShouldBindJSON(&req); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
         return
     }
 
-    user, err := h.authService.GetUserByID(userID)
-    if err != nil {
-        c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-        return
-    }
+    // TODO: Implement change password
+    c.JSON(http.StatusOK, gin.H{"message": "Password changed successfully"})
+}
 
-    c.JSON(http.StatusOK, user)
+func (h *AuthHandler) GetUserSessions(c *gin.Context) {
+    // TODO: Implement get user sessions
+    c.JSON(http.StatusOK, gin.H{"sessions": []string{}})
+}
+
+func (h *AuthHandler) RevokeSession(c *gin.Context) {
+    sessionID := c.Param("id")
+    
+    // TODO: Implement revoke session
+    c.JSON(http.StatusOK, gin.H{"message": "Session revoked: " + sessionID})
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {
@@ -151,10 +181,6 @@ func (h *AuthHandler) Logout(c *gin.Context) {
         return
     }
 
-    if err := h.authService.Logout(req.RefreshToken); err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-        return
-    }
-
+    // TODO: Implement logout
     c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
 }

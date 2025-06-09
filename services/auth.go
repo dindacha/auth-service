@@ -248,6 +248,24 @@ func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
     return claims, nil
 }
 
+func (s *AuthService) GetUserPermissions(role models.UserRole, userID uuid.UUID) ([]string, error) {
+    var permissions []string
+    
+    // Query untuk mendapatkan permissions berdasarkan role
+    err := s.db.Table("role_permissions").
+        Select("permissions.name").
+        Joins("JOIN permissions ON role_permissions.permission_id = permissions.id").
+        Joins("JOIN roles ON roles.id = role_permissions.role_id").
+        Where("roles.name = ?", string(role)).
+        Pluck("permissions.name", &permissions).Error
+    
+    if err != nil {
+        return nil, err
+    }
+    
+    return permissions, nil
+}
+
 func (s *AuthService) generateAuthResponse(userAuth *models.UserAuth, userInfo *UserInfo, sessionID, ipAddress, userAgent string) (*AuthResponse, error) {
     // Get user permissions
     permissions, err := s.GetUserPermissions(models.UserRole(userInfo.Role), userAuth.ID)
