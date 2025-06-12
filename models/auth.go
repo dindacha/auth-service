@@ -1,3 +1,4 @@
+// Updated models/auth.go for friend's user service integration
 package models
 
 import (
@@ -9,15 +10,17 @@ import (
 type UserRole string
 
 const (
-    UserRoleAdmin    UserRole = "ADMIN"
-    UserRoleCustomer UserRole = "CUSTOMER"
-    UserRoleMerchant UserRole = "MERCHANT"
+    UserRoleAdmin     UserRole = "ADMIN"
+    UserRoleCustomer  UserRole = "CUSTOMER"  // Keep for backward compatibility
+    UserRoleMember    UserRole = "MEMBER"    // New: For library members
+    UserRoleMerchant  UserRole = "MERCHANT"  // Keep if you need it
     UserRoleModerator UserRole = "MODERATOR"
 )
 
-// UserAuth stores authentication-specific data
+// Updated UserAuth to link with friend's user service
 type UserAuth struct {
     ID                uuid.UUID  `json:"id" gorm:"type:uuid;primary_key"`
+    MemberID          *int       `json:"member_id" gorm:"index;unique"`  // 🆕 Link to friend's service
     Email             string     `json:"email" gorm:"unique;not null;index"`
     PasswordHash      string     `json:"-" gorm:"not null"`
     IsActive          bool       `json:"is_active" gorm:"default:true;index"`
@@ -49,13 +52,13 @@ type RefreshToken struct {
 
 // LoginAttempt tracks login attempts for security
 type LoginAttempt struct {
-    ID        uuid.UUID `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-    Email     string    `json:"email" gorm:"not null;index"`
-    IPAddress string    `json:"ip_address" gorm:"index"`
-    UserAgent string    `json:"user_agent"`
-    Success   bool      `json:"success" gorm:"index"`
-    FailureReason string `json:"failure_reason"`
-    CreatedAt time.Time `json:"created_at" gorm:"index"`
+    ID            uuid.UUID `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+    Email         string    `json:"email" gorm:"not null;index"`
+    IPAddress     string    `json:"ip_address" gorm:"index"`
+    UserAgent     string    `json:"user_agent"`
+    Success       bool      `json:"success" gorm:"index"`
+    FailureReason string    `json:"failure_reason"`
+    CreatedAt     time.Time `json:"created_at" gorm:"index"`
 }
 
 // Session tracks active user sessions

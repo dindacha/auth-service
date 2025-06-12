@@ -31,8 +31,17 @@ type LoginRequest struct {
     Password string `json:"password" binding:"required"`
 }
 
+// Keep your existing RegisterAuthRequest for backward compatibility
 type RegisterAuthRequest struct {
     UserID   string `json:"user_id" binding:"required"`
+    Email    string `json:"email" binding:"required,email"`
+    Password string `json:"password" binding:"required,min=8"`
+}
+
+// 🆕 ADD: New struct for library member registration
+type RegisterLibraryMemberRequest struct {
+    Name     string `json:"name" binding:"required"`
+    Phone    string `json:"phone" binding:"required"`
     Email    string `json:"email" binding:"required,email"`
     Password string `json:"password" binding:"required,min=8"`
 }
@@ -53,6 +62,7 @@ func NewAuthService(db *gorm.DB, config *config.Config, userClient *UserClient) 
     }
 }
 
+// Keep your existing RegisterUserAuth method unchanged for backward compatibility
 func (s *AuthService) RegisterUserAuth(req RegisterAuthRequest) error {
     // Parse string UserID ke uuid.UUID
     userID, err := uuid.Parse(req.UserID)
@@ -79,7 +89,7 @@ func (s *AuthService) RegisterUserAuth(req RegisterAuthRequest) error {
 
     // Create user auth record
     userAuth := &models.UserAuth{
-        ID:                userID, // Gunakan userID yang sudah di-parse
+        ID:                userID,
         Email:             req.Email,
         PasswordHash:      string(hashedPassword),
         IsActive:          true,
@@ -93,12 +103,62 @@ func (s *AuthService) RegisterUserAuth(req RegisterAuthRequest) error {
         return err
     }
 
-    // Log audit event dengan userID yang sudah di-parse
+    // Log audit event
     s.logAuditEvent(&userID, models.AuditActionLogin, "auth", "User auth created", "", "", true, "")
 
     return nil
 }
 
+// 🆕 ADD: New method for library member registration
+func (s *AuthService) RegisterLibraryMember(req RegisterLibraryMemberRequest) error {
+    // Check if email already exists in auth service
+    var existingAuth models.UserAuth
+    if err := s.db.Where("email = ?", req.Email).First(&existingAuth).Error; err == nil {
+        return errors.New("email already registered")
+    }
+
+    // Validate password strength
+    if err := s.validatePassword(req.Password); err != nil {
+        return err
+    }
+
+    // Hash password
+    hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), s.config.BCryptCost)
+    if err != nil {
+        return fmt.Errorf("failed to hash password: %w", err)
+    }
+
+    // Step 1: Create member in friend's user service using GraphQL
+    memberInfo, err := s.userClient.CreateMember(req.Name, req.Phone)
+    if err != nil {
+        return fmt.Errorf("failed to create member in user service: %w", err)
+    }
+
+    // Step 2: Create auth record with member_id link and email
+    userID := uuid.New()
+    userAuth := &models.UserAuth{
+        ID:                userID,
+        MemberID:          &memberInfo.MemberID,  // Link to friend's service
+        Email:             req.Email,             // Only stored in auth service
+        PasswordHash:      string(hashedPassword),
+        IsActive:          true,
+        IsEmailVerified:   !s.config.Security.RequireEmailVerification,
+        PasswordChangedAt: &time.Time{},
+        CreatedAt:         time.Now(),
+        UpdatedAt:         time.Now(),
+    }
+
+    if err := s.db.Create(userAuth).Error; err != nil {
+        return fmt.Errorf("failed to create auth record: %w", err)
+    }
+
+    // Log successful registration
+    s.logAuditEvent(&userID, models.AuditActionLogin, "auth", "Library member registered", "", "", true, "")
+
+    return nil
+}
+
+// 🔄 UPDATE: Modified Login method to work with member_id lookup
 func (s *AuthService) Login(req LoginRequest, ipAddress, userAgent string) (*AuthResponse, error) {
     // Check rate limiting
     if err := s.checkRateLimit(req.Email, ipAddress); err != nil {
@@ -106,7 +166,7 @@ func (s *AuthService) Login(req LoginRequest, ipAddress, userAgent string) (*Aut
         return nil, err
     }
 
-    // Get user auth record
+    // Get user auth record by email
     var userAuth models.UserAuth
     if err := s.db.Where("email = ?", req.Email).First(&userAuth).Error; err != nil {
         s.logLoginAttempt(req.Email, ipAddress, userAgent, false, "User not found")
@@ -139,17 +199,39 @@ func (s *AuthService) Login(req LoginRequest, ipAddress, userAgent string) (*Aut
         "last_login_ip":     ipAddress,
     })
 
-    // Get user info from user service
-    userInfo, err := s.userClient.GetUserByEmail(req.Email)
-    if err != nil {
-        s.logLoginAttempt(req.Email, ipAddress, userAgent, false, "User service error")
-        return nil, fmt.Errorf("failed to get user info: %w", err)
-    }
-
-    // Check if user is active in user service
-    if !userInfo.IsActive {
-        s.logLoginAttempt(req.Email, ipAddress, userAgent, false, "User inactive")
-        return nil, errors.New("user account is deactivated")
+    // Get member info from friend's user service using member_id
+    var memberInfo *UserInfo
+    if userAuth.MemberID != nil {
+        memberInfo, err = s.userClient.GetUserByMemberID(*userAuth.MemberID)
+        if err != nil {
+            // If user service is down, create minimal user info
+            s.logLoginAttempt(req.Email, ipAddress, userAgent, false, "User service unavailable")
+            memberInfo = &UserInfo{
+                ID:          userAuth.ID,
+                MemberID:    *userAuth.MemberID,
+                Name:        "Member",  // Fallback
+                Email:       userAuth.Email,
+                Role:        "MEMBER",
+                IsActive:    userAuth.IsActive,
+                IsVerified:  userAuth.IsEmailVerified,
+                CreatedAt:   userAuth.CreatedAt,
+            }
+        } else {
+            // Add email from auth service to member info
+            memberInfo.Email = userAuth.Email
+            memberInfo.ID = userAuth.ID
+        }
+    } else {
+        // No member_id link - create minimal info (for backward compatibility)
+        memberInfo = &UserInfo{
+            ID:          userAuth.ID,
+            Name:        "Member",
+            Email:       userAuth.Email,
+            Role:        "MEMBER",
+            IsActive:    userAuth.IsActive,
+            IsVerified:  userAuth.IsEmailVerified,
+            CreatedAt:   userAuth.CreatedAt,
+        }
     }
 
     // Create session
@@ -166,7 +248,7 @@ func (s *AuthService) Login(req LoginRequest, ipAddress, userAgent string) (*Aut
     }
 
     if err := s.db.Create(session).Error; err != nil {
-        return nil, err
+        return nil, fmt.Errorf("failed to create session: %w", err)
     }
 
     // Log successful login
@@ -174,9 +256,10 @@ func (s *AuthService) Login(req LoginRequest, ipAddress, userAgent string) (*Aut
     s.logAuditEvent(&userAuth.ID, models.AuditActionLogin, "auth", "User logged in", ipAddress, userAgent, true, "")
 
     // Generate tokens
-    return s.generateAuthResponse(&userAuth, userInfo, sessionID, ipAddress, userAgent)
+    return s.generateAuthResponse(&userAuth, memberInfo, sessionID, ipAddress, userAgent)
 }
 
+// 🔄 UPDATE: Modified RefreshToken method
 func (s *AuthService) RefreshToken(refreshToken string, ipAddress, userAgent string) (*AuthResponse, error) {
     var tokenRecord models.RefreshToken
     if err := s.db.Preload("UserAuth").Where("token = ? AND expires_at > ? AND is_revoked = ?", refreshToken, time.Now(), false).First(&tokenRecord).Error; err != nil {
@@ -188,15 +271,26 @@ func (s *AuthService) RefreshToken(refreshToken string, ipAddress, userAgent str
         return nil, errors.New("account is deactivated")
     }
 
-    // Get user info from user service
-    userInfo, err := s.userClient.GetUserByID(tokenRecord.UserID)
-    if err != nil {
-        return nil, fmt.Errorf("failed to get user info: %w", err)
+    // Get updated member info from friend's service
+    var memberInfo *UserInfo
+    if tokenRecord.UserAuth.MemberID != nil {
+        memberInfo, _ = s.userClient.GetUserByMemberID(*tokenRecord.UserAuth.MemberID)
     }
-
-    // Check if user is still active in user service
-    if !userInfo.IsActive {
-        return nil, errors.New("user account is deactivated")
+    
+    if memberInfo == nil {
+        // Fallback if user service is unavailable
+        memberInfo = &UserInfo{
+            ID:          tokenRecord.UserAuth.ID,
+            Email:       tokenRecord.UserAuth.Email,
+            Name:        "Member",
+            Role:        "MEMBER",
+            IsActive:    tokenRecord.UserAuth.IsActive,
+            IsVerified:  tokenRecord.UserAuth.IsEmailVerified,
+            CreatedAt:   tokenRecord.UserAuth.CreatedAt,
+        }
+    } else {
+        memberInfo.Email = tokenRecord.UserAuth.Email
+        memberInfo.ID = tokenRecord.UserAuth.ID
     }
 
     // Revoke old refresh token
@@ -223,9 +317,10 @@ func (s *AuthService) RefreshToken(refreshToken string, ipAddress, userAgent str
     s.logAuditEvent(&tokenRecord.UserID, models.AuditActionTokenRefresh, "auth", "Token refreshed", ipAddress, userAgent, true, "")
 
     // Generate new tokens
-    return s.generateAuthResponse(&tokenRecord.UserAuth, userInfo, sessionID, ipAddress, userAgent)
+    return s.generateAuthResponse(&tokenRecord.UserAuth, memberInfo, sessionID, ipAddress, userAgent)
 }
 
+// Keep your existing ValidateToken method unchanged
 func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
     claims, err := s.tokenService.ValidateToken(tokenString)
     if err != nil {
@@ -254,6 +349,36 @@ func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
     return claims, nil
 }
 
+// 🆕 ADD: Get user by email (combines data from both services)
+func (s *AuthService) GetUserByEmail(email string) (*UserInfo, error) {
+    var userAuth models.UserAuth
+    if err := s.db.Where("email = ?", email).First(&userAuth).Error; err != nil {
+        return nil, errors.New("user not found")
+    }
+
+    // Get member info from friend's service
+    if userAuth.MemberID != nil {
+        memberInfo, err := s.userClient.GetUserByMemberID(*userAuth.MemberID)
+        if err == nil {
+            memberInfo.Email = userAuth.Email
+            memberInfo.ID = userAuth.ID
+            return memberInfo, nil
+        }
+    }
+
+    // Fallback to auth service data only
+    return &UserInfo{
+        ID:          userAuth.ID,
+        Email:       userAuth.Email,
+        Name:        "Member",
+        Role:        "MEMBER",
+        IsActive:    userAuth.IsActive,
+        IsVerified:  userAuth.IsEmailVerified,
+        CreatedAt:   userAuth.CreatedAt,
+    }, nil
+}
+
+// Keep your existing GetUserPermissions method unchanged
 func (s *AuthService) GetUserPermissions(role models.UserRole, userID uuid.UUID) ([]string, error) {
     var permissions []string
     
@@ -271,6 +396,7 @@ func (s *AuthService) GetUserPermissions(role models.UserRole, userID uuid.UUID)
     return permissions, nil
 }
 
+// Keep your existing generateAuthResponse method unchanged
 func (s *AuthService) generateAuthResponse(userAuth *models.UserAuth, userInfo *UserInfo, sessionID, ipAddress, userAgent string) (*AuthResponse, error) {
     // Get user permissions
     permissions, err := s.GetUserPermissions(models.UserRole(userInfo.Role), userAuth.ID)
@@ -307,6 +433,7 @@ func (s *AuthService) generateAuthResponse(userAuth *models.UserAuth, userInfo *
     }, nil
 }
 
+// Keep all your existing helper methods unchanged
 func (s *AuthService) validatePassword(password string) error {
     if len(password) < s.config.Security.PasswordMinLength {
         return fmt.Errorf("password must be at least %d characters long", s.config.Security.PasswordMinLength)
