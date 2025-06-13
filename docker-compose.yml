@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: auth_postgres
+    environment:
+      POSTGRES_DB: auth_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 1235813
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d auth_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - auth_network
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: auth_service
+    environment:
+      PORT: 8098
+      ENVIRONMENT: development
+      DATABASE_URL: postgres://postgres:1235813@postgres:5432/auth_db?sslmode=disable
+      JWT_SECRET: your-very-secret-jwt-key-change-in-production
+      JWT_EXPIRATION_HOURS: 24
+      REFRESH_EXPIRATION_DAYS: 7
+      USER_SERVICE_URL: http://member-service:5000
+      BCRYPT_COST: 12
+      RATE_LIMIT_LOGIN_ATTEMPTS: 5
+      RATE_LIMIT_LOGIN_WINDOW_MINUTES: 15
+      RATE_LIMIT_TOKEN_REQUESTS: 10
+      RATE_LIMIT_TOKEN_WINDOW_MINUTES: 1
+      REQUIRE_EMAIL_VERIFICATION: false
+      ENABLE_2FA: false
+      PASSWORD_MIN_LENGTH: 8
+      PASSWORD_REQUIRE_SPECIAL: true
+      SESSION_TIMEOUT_HOURS: 24
+      MAX_ACTIVE_SESSIONS: 5
+    ports:
+      - "8098:8098"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8098/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - auth_network
+    restart: unless-stopped
+
+  member-service:
+    image: user-service-tubes-iae
+    container_name: member_service
+    environment:
+      PORT: 5000
+    ports:
+      - "5000:5000"
+    networks:
+      - auth_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  auth_network:
+    driver: bridge
