@@ -1,67 +1,96 @@
-// STEP-BY-STEP UPDATE for services/user_client.go
-// Replace your entire file with this content
-
+// services/user_client.go - Updated for Member Service Integration
 package services
 
 import (
-    "bytes"
-    "context"
-    "encoding/json"
-    "fmt"
-    "net/http"
-    "strconv"
-    "time"
-    "github.com/google/uuid"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/google/uuid"
+	"net/http"
+	"time"
 )
 
-// STEP 1: Update UserInfo struct to match friend's service
+// Member represents the member from your friend's service
+type Member struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	PhoneNumber string `json:"phone_number"`
+	Borrowings  []Loan `json:"borrowings"`
+}
+
+// Loan represents borrowing records
+type Loan struct {
+	ID                  string `json:"id"`
+	BookID              int    `json:"book_id"`
+	TanggalPeminjaman   string `json:"tanggal_peminjaman"`
+	TanggalJatuhTempo   string `json:"tanggal_jatuh_tempo"`
+	TanggalPengembalian string `json:"tanggal_pengembalian"`
+	Status              string `json:"status"`
+	Denda               int    `json:"denda"`
+}
+
+// UserInfo represents combined user information (auth + member data)
 type UserInfo struct {
-    ID          uuid.UUID `json:"id"`           // We'll generate this
-    MemberID    int       `json:"member_id"`    // Store their integer ID
-    Name        string    `json:"name"`         // Single name (not first/last)
-    PhoneNumber string    `json:"phone_number"` // Match their field name
-    Email       string    `json:"email"`        // Only stored in auth service
-    Role        string    `json:"role"`         // Default "MEMBER"
-    IsActive    bool      `json:"is_active"`    // Default true
-    IsVerified  bool      `json:"is_verified"`  // Default true
-    CreatedAt   time.Time `json:"created_at"`   // Default now
+	ID         uuid.UUID `json:"id"`          // Auth service UUID
+	MemberID   string    `json:"member_id"`   // Member service ID
+	Name       string    `json:"name"`        // From member service
+	Phone      string    `json:"phone"`       // From member service
+	Email      string    `json:"email"`       // From auth service only
+	Role       string    `json:"role"`        // Default "MEMBER"
+	IsActive   bool      `json:"is_active"`   // From auth service
+	IsVerified bool      `json:"is_verified"` // From auth service
+	CreatedAt  time.Time `json:"created_at"`  // From auth service
+	Borrowings []Loan    `json:"borrowings"`  // From member service
 }
 
-// STEP 2: Add struct to match friend's service response
-type MemberResponse struct {
-    ID          int    `json:"id"`
-    Name        string `json:"name"`
-    PhoneNumber string `json:"phone_number"`
-}
-
-// STEP 3: Add GraphQL request/response structs
+// GraphQL request/response structures
 type GraphQLRequest struct {
-    Query     string                 `json:"query"`
-    Variables map[string]interface{} `json:"variables"`
+	Query     string                 `json:"query"`
+	Variables map[string]interface{} `json:"variables"`
 }
 
 type GraphQLResponse struct {
-    Data   json.RawMessage `json:"data"`
-    Errors []GraphQLError  `json:"errors"`
+	Data   json.RawMessage `json:"data"`
+	Errors []GraphQLError  `json:"errors"`
 }
 
 type GraphQLError struct {
-    Message string `json:"message"`
+	Message string `json:"message"`
 }
 
-// STEP 4: Add GraphQL queries for friend's service
+// GraphQL queries for member service
 const (
-    GetMemberByIDQuery = `
+	GetMemberQuery = `
         query GetMember($id: ID!) {
             member(id: $id) {
+                id
+                name
+                phone_number
+                borrowings {
+                    id
+                    book_id
+                    tanggal_peminjaman
+                    tanggal_jatuh_tempo
+                    tanggal_pengembalian
+                    status
+                    denda
+                }
+            }
+        }
+    `
+
+	GetAllMembersQuery = `
+        query GetAllMembers {
+            members {
                 id
                 name
                 phone_number
             }
         }
     `
-    
-    RegisterMemberMutation = `
+
+	RegisterMemberMutation = `
         mutation RegisterMember($name: String!, $phone: String!) {
             registerMember(name: $name, phone: $phone) {
                 id
@@ -70,182 +99,229 @@ const (
             }
         }
     `
+
+	UpdateMemberMutation = `
+        mutation UpdateMember($id: ID!, $name: String, $phone: String) {
+            updateMember(id: $id, name: $name, phone: $phone) {
+                id
+                name
+                phone_number
+            }
+        }
+    `
 )
 
-// STEP 5: Update UserClient struct
 type UserClient struct {
-    baseURL    string
-    client     *http.Client
-    timeout    time.Duration
-    graphqlURL string  // Add GraphQL endpoint
+	baseURL    string
+	client     *http.Client
+	timeout    time.Duration
+	graphqlURL string
 }
 
-// STEP 6: Update NewUserClient function
 func NewUserClient(baseURL string) *UserClient {
-    return &UserClient{
-        baseURL:    baseURL,
-        client:     &http.Client{Timeout: 30 * time.Second},
-        timeout:    30 * time.Second,
-        graphqlURL: baseURL + "/graphql", // Friend's GraphQL endpoint
-    }
+	return &UserClient{
+		baseURL:    baseURL,
+		client:     &http.Client{Timeout: 30 * time.Second},
+		timeout:    30 * time.Second,
+		graphqlURL: baseURL + "/graphql",
+	}
 }
 
-// STEP 7: Update GetUserByEmail method
-// Note: Since friend's service doesn't support email lookup,
-// this method will not work directly. We'll handle this in auth service.
-func (c *UserClient) GetUserByEmail(email string) (*UserInfo, error) {
-    return nil, fmt.Errorf("email lookup not supported - use GetUserByMemberID instead")
+// GetMemberByID fetches member data from member service
+func (c *UserClient) GetMemberByID(memberID string) (*Member, error) {
+	variables := map[string]interface{}{
+		"id": memberID,
+	}
+
+	response, err := c.executeGraphQL(GetMemberQuery, variables)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get member: %w", err)
+	}
+
+	var result struct {
+		Member *Member `json:"member"`
+	}
+
+	if err := json.Unmarshal(response.Data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse member data: %w", err)
+	}
+
+	if result.Member == nil {
+		return nil, fmt.Errorf("member not found with ID: %s", memberID)
+	}
+
+	return result.Member, nil
 }
 
-// STEP 8: Replace GetUserByID with GetUserByMemberID
-func (c *UserClient) GetUserByMemberID(memberID int) (*UserInfo, error) {
-    variables := map[string]interface{}{
-        "id": strconv.Itoa(memberID),
-    }
-    
-    response, err := c.executeGraphQL(GetMemberByIDQuery, variables)
-    if err != nil {
-        return nil, fmt.Errorf("failed to get member: %w", err)
-    }
-    
-    var result struct {
-        Member *MemberResponse `json:"member"`
-    }
-    
-    if err := json.Unmarshal(response.Data, &result); err != nil {
-        return nil, fmt.Errorf("failed to parse member data: %w", err)
-    }
-    
-    if result.Member == nil {
-        return nil, fmt.Errorf("member not found with ID: %d", memberID)
-    }
-    
-    return c.convertToUserInfo(result.Member, ""), nil
+// GetAllMembers fetches all members (useful for admin functions)
+func (c *UserClient) GetAllMembers() ([]Member, error) {
+	response, err := c.executeGraphQL(GetAllMembersQuery, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get members: %w", err)
+	}
+
+	var result struct {
+		Members []Member `json:"members"`
+	}
+
+	if err := json.Unmarshal(response.Data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse members data: %w", err)
+	}
+
+	return result.Members, nil
 }
 
-// STEP 9: Add GetUserByID method (for backward compatibility)
-func (c *UserClient) GetUserByID(userID uuid.UUID) (*UserInfo, error) {
-    // Since we can't convert UUID to friend's integer ID directly,
-    // this method is not supported for the integration
-    return nil, fmt.Errorf("GetUserByID not supported - use GetUserByMemberID instead")
+// CreateMember creates a new member in the member service
+func (c *UserClient) CreateMember(name, phone string) (*Member, error) {
+	variables := map[string]interface{}{
+		"name":  name,
+		"phone": phone,
+	}
+
+	response, err := c.executeGraphQL(RegisterMemberMutation, variables)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create member: %w", err)
+	}
+
+	var result struct {
+		RegisterMember *Member `json:"registerMember"`
+	}
+
+	if err := json.Unmarshal(response.Data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse created member: %w", err)
+	}
+
+	if result.RegisterMember == nil {
+		return nil, fmt.Errorf("failed to create member")
+	}
+
+	return result.RegisterMember, nil
 }
 
-// STEP 10: Replace NotifyUserAuth with CreateMember
-func (c *UserClient) CreateMember(name, phone string) (*UserInfo, error) {
-    variables := map[string]interface{}{
-        "name":  name,
-        "phone": phone,
-    }
-    
-    response, err := c.executeGraphQL(RegisterMemberMutation, variables)
-    if err != nil {
-        return nil, fmt.Errorf("failed to create member: %w", err)
-    }
-    
-    var result struct {
-        RegisterMember *MemberResponse `json:"registerMember"`
-    }
-    
-    if err := json.Unmarshal(response.Data, &result); err != nil {
-        return nil, fmt.Errorf("failed to parse created member: %w", err)
-    }
-    
-    if result.RegisterMember == nil {
-        return nil, fmt.Errorf("failed to create member")
-    }
-    
-    return c.convertToUserInfo(result.RegisterMember, ""), nil
+// UpdateMember updates member information in the member service
+func (c *UserClient) UpdateMember(memberID, name, phone string) (*Member, error) {
+	variables := map[string]interface{}{
+		"id": memberID,
+	}
+
+	if name != "" {
+		variables["name"] = name
+	}
+	if phone != "" {
+		variables["phone"] = phone
+	}
+
+	response, err := c.executeGraphQL(UpdateMemberMutation, variables)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update member: %w", err)
+	}
+
+	var result struct {
+		UpdateMember *Member `json:"updateMember"`
+	}
+
+	if err := json.Unmarshal(response.Data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse updated member: %w", err)
+	}
+
+	if result.UpdateMember == nil {
+		return nil, fmt.Errorf("failed to update member")
+	}
+
+	return result.UpdateMember, nil
 }
 
-// STEP 11: Add helper method to convert friend's data to UserInfo
-func (c *UserClient) convertToUserInfo(member *MemberResponse, email string) *UserInfo {
-    // Generate deterministic UUID from member ID
-    userID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("member_%d", member.ID)))
-    
-    return &UserInfo{
-        ID:          userID,
-        MemberID:    member.ID,
-        Name:        member.Name,
-        PhoneNumber: member.PhoneNumber,
-        Email:       email,           // This will be stored only in auth service
-        Role:        "MEMBER",        // Default role
-        IsActive:    true,            // Default active
-        IsVerified:  true,            // Default verified
-        CreatedAt:   time.Now(),      // Default to now
-    }
+// CombineUserInfo combines auth data with member data
+func (c *UserClient) CombineUserInfo(authID uuid.UUID, memberID, email string, isActive, isVerified bool, createdAt time.Time) (*UserInfo, error) {
+	member, err := c.GetMemberByID(memberID)
+	if err != nil {
+		// If member service is down, return minimal info
+		return &UserInfo{
+			ID:         authID,
+			MemberID:   memberID,
+			Name:       "Member",
+			Email:      email,
+			Role:       "MEMBER",
+			IsActive:   isActive,
+			IsVerified: isVerified,
+			CreatedAt:  createdAt,
+			Borrowings: []Loan{},
+		}, nil
+	}
+
+	return &UserInfo{
+		ID:         authID,
+		MemberID:   member.ID,
+		Name:       member.Name,
+		Phone:      member.PhoneNumber,
+		Email:      email,
+		Role:       "MEMBER",
+		IsActive:   isActive,
+		IsVerified: isVerified,
+		CreatedAt:  createdAt,
+		Borrowings: member.Borrowings,
+	}, nil
 }
 
-// STEP 12: Add GraphQL execution method
+// executeGraphQL executes GraphQL queries against the member service
 func (c *UserClient) executeGraphQL(query string, variables map[string]interface{}) (*GraphQLResponse, error) {
-    ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-    defer cancel()
-    
-    reqBody := GraphQLRequest{
-        Query:     query,
-        Variables: variables,
-    }
-    
-    jsonData, err := json.Marshal(reqBody)
-    if err != nil {
-        return nil, fmt.Errorf("failed to marshal request: %w", err)
-    }
-    
-    req, err := http.NewRequestWithContext(ctx, "POST", c.graphqlURL, bytes.NewBuffer(jsonData))
-    if err != nil {
-        return nil, fmt.Errorf("failed to create request: %w", err)
-    }
-    
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("User-Agent", "auth-service/1.0")
-    
-    resp, err := c.client.Do(req)
-    if err != nil {
-        return nil, fmt.Errorf("request failed: %w", err)
-    }
-    defer resp.Body.Close()
-    
-    if resp.StatusCode != http.StatusOK {
-        return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-    }
-    
-    var graphqlResp GraphQLResponse
-    if err := json.NewDecoder(resp.Body).Decode(&graphqlResp); err != nil {
-        return nil, fmt.Errorf("failed to decode response: %w", err)
-    }
-    
-    if len(graphqlResp.Errors) > 0 {
-        return nil, fmt.Errorf("GraphQL errors: %v", graphqlResp.Errors)
-    }
-    
-    return &graphqlResp, nil
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	reqBody := GraphQLRequest{
+		Query:     query,
+		Variables: variables,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.graphqlURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "auth-service/1.0")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var graphqlResp GraphQLResponse
+	if err := json.NewDecoder(resp.Body).Decode(&graphqlResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if len(graphqlResp.Errors) > 0 {
+		return nil, fmt.Errorf("GraphQL errors: %v", graphqlResp.Errors)
+	}
+
+	return &graphqlResp, nil
 }
 
-// STEP 13: Add health check method
+// HealthCheck checks if member service is available
 func (c *UserClient) HealthCheck() error {
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
-    
-    req, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/", nil)
-    resp, err := c.client.Do(req)
-    if err != nil {
-        return err
-    }
-    defer resp.Body.Close()
-    
-    if resp.StatusCode != http.StatusOK {
-        return fmt.Errorf("user service health check failed: %d", resp.StatusCode)
-    }
-    return nil
-}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-// STEP 14: Keep this for backward compatibility (but it won't be used)
-type CreateUserAuthRequest struct {
-    UserID   uuid.UUID `json:"user_id"`
-    Email    string    `json:"email"`
-    Password string    `json:"password"`
-}
+	req, _ := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/", nil)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
 
-func (c *UserClient) NotifyUserAuth(req CreateUserAuthRequest) error {
-    // This method is deprecated for the new integration
-    return fmt.Errorf("NotifyUserAuth is deprecated - use CreateMember instead")
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("member service health check failed: %d", resp.StatusCode)
+	}
+	return nil
 }

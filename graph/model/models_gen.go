@@ -10,11 +10,11 @@ import (
 )
 
 type AuthResponse struct {
-	AccessToken  string `json:"accessToken"`
-	RefreshToken string `json:"refreshToken"`
-	ExpiresIn    int    `json:"expiresIn"`
-	TokenType    string `json:"tokenType"`
-	User         *User  `json:"user"`
+	AccessToken string `json:"accessToken"`
+	RefresToken string `json:"refresToken"`
+	ExpiresIn   int    `json:"expiresIn"`
+	TokenType   string `json:"tokenType"`
+	User        *User  `json:"user"`
 }
 
 type ChangePasswordInput struct {
@@ -32,6 +32,16 @@ type HealthResponse struct {
 	Status  string `json:"status"`
 	Service string `json:"service"`
 	Version string `json:"version"`
+}
+
+type Loan struct {
+	ID                  string  `json:"id"`
+	BookID              int     `json:"bookId"`
+	TanggalPeminjaman   *string `json:"tanggalPeminjaman,omitempty"`
+	TanggalJatuhTempo   *string `json:"tanggalJatuhTempo,omitempty"`
+	TanggalPengembalian *string `json:"tanggalPengembalian,omitempty"`
+	Status              *string `json:"status,omitempty"`
+	Denda               *int    `json:"denda,omitempty"`
 }
 
 type LoginInput struct {
@@ -60,6 +70,13 @@ type RegisterAuthInput struct {
 	Password string `json:"password"`
 }
 
+type RegisterLibraryMemberInput struct {
+	Name     string `json:"name"`
+	Phone    string `json:"phone"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
 type Session struct {
 	ID        string `json:"id"`
 	TokenID   string `json:"tokenID"`
@@ -71,8 +88,15 @@ type Session struct {
 	UserAgent string `json:"userAgent"`
 }
 
+type UpdateMemberInput struct {
+	Email string  `json:"email"`
+	Name  *string `json:"name,omitempty"`
+	Phone *string `json:"phone,omitempty"`
+}
+
 type User struct {
 	ID         string   `json:"id"`
+	MemberID   *string  `json:"memberId,omitempty"`
 	Email      string   `json:"email"`
 	FirstName  string   `json:"firstName"`
 	LastName   string   `json:"lastName"`
@@ -81,6 +105,7 @@ type User struct {
 	IsActive   bool     `json:"isActive"`
 	IsVerified bool     `json:"isVerified"`
 	CreatedAt  string   `json:"createdAt"`
+	Borrowings []*Loan  `json:"borrowings"`
 }
 
 type ValidationResponse struct {
@@ -95,6 +120,7 @@ type UserRole string
 const (
 	UserRoleAdmin     UserRole = "ADMIN"
 	UserRoleCustomer  UserRole = "CUSTOMER"
+	UserRoleMember    UserRole = "MEMBER"
 	UserRoleMerchant  UserRole = "MERCHANT"
 	UserRoleModerator UserRole = "MODERATOR"
 )
@@ -102,13 +128,14 @@ const (
 var AllUserRole = []UserRole{
 	UserRoleAdmin,
 	UserRoleCustomer,
+	UserRoleMember,
 	UserRoleMerchant,
 	UserRoleModerator,
 }
 
 func (e UserRole) IsValid() bool {
 	switch e {
-	case UserRoleAdmin, UserRoleCustomer, UserRoleMerchant, UserRoleModerator:
+	case UserRoleAdmin, UserRoleCustomer, UserRoleMember, UserRoleMerchant, UserRoleModerator:
 		return true
 	}
 	return false

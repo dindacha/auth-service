@@ -1,25 +1,41 @@
+# schema.graphql - Updated with Member Integration
+
 type User {
   id: String!
+  memberId: String          # Link to member service
   email: String!
-  firstName: String!
-  lastName: String!
+  firstName: String!        # Split from member service name
+  lastName: String!         # Split from member service name
   phone: String
   role: UserRole!
   isActive: Boolean!
   isVerified: Boolean!
   createdAt: String!
+  borrowings: [Loan!]!      # From member service
+}
+
+# 🆕 NEW: Loan information from member service
+type Loan {
+  id: String!
+  bookId: Int!
+  tanggalPeminjaman: String
+  tanggalJatuhTempo: String
+  tanggalPengembalian: String
+  status: String
+  denda: Int
 }
 
 enum UserRole {
   ADMIN
   CUSTOMER
+  MEMBER                    # Primary role for library members
   MERCHANT
   MODERATOR
 }
 
 type AuthResponse {
   accessToken: String!
-  refreshToken: String!
+  refresToken: String!
   expiresIn: Int!
   tokenType: String!
   user: User!
@@ -37,11 +53,20 @@ type PermissionResponse {
   userID: String!
 }
 
+# 🆕 NEW: Library member registration input
+input RegisterLibraryMemberInput {
+  name: String!
+  phone: String!
+  email: String!
+  password: String!
+}
+
 input LoginInput {
   email: String!
   password: String!
 }
 
+# Keep for backward compatibility
 input RegisterAuthInput {
   userID: String!
   email: String!
@@ -58,10 +83,19 @@ input ChangePasswordInput {
   newPassword: String!
 }
 
+# 🆕 NEW: Update member info input
+input UpdateMemberInput {
+  email: String!
+  name: String
+  phone: String
+}
+
 type Query {
   validateToken(token: String!): ValidationResponse!
   checkPermission(token: String!, resource: String!, action: String!): PermissionResponse!
   getUserSessions(token: String!): [Session!]!
+  getUserByEmail(email: String!): User                    # 🆕 NEW
+  getUserWithBorrowings(email: String!): User             # 🆕 NEW
   health: HealthResponse!
 }
 
@@ -69,8 +103,14 @@ type Mutation {
   login(input: LoginInput!): AuthResponse!
   refreshToken(input: RefreshTokenInput!): AuthResponse!
   logout(refreshToken: String!): GenericResponse!
-  registerUserAuth(input: RegisterAuthInput!): GenericResponse!
+
+  # Registration methods
+  registerLibraryMember(input: RegisterLibraryMemberInput!): GenericResponse!  # 🆕 PRIMARY
+  registerUserAuth(input: RegisterAuthInput!): GenericResponse!                # Keep for compatibility
+
+  # Account management
   changePassword(input: ChangePasswordInput!): GenericResponse!
+  updateMemberInfo(input: UpdateMemberInput!): GenericResponse!               # 🆕 NEW
   revokeSession(token: String!, sessionID: String!): GenericResponse!
 }
 
